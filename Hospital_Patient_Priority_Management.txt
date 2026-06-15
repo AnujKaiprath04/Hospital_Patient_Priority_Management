@@ -1,0 +1,321 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <ctype.h>
+
+#define NAME_LEN 64
+#define DIAG_LEN 128
+#define FNAME "hospital.db"
+
+typedef struct {
+    int id;
+    char name[NAME_LEN];
+    int age;
+    int pri;
+    char diag[DIAG_LEN];
+    char atime[32];
+} P;
+
+typedef struct {
+    P *a;
+    int n;
+    int cap;
+    int nextid;
+} Heap;
+
+void nowstr(char *buf, int s){
+    time_t t=time(NULL);
+    struct tm *tm=localtime(&t);
+    strftime(buf,s,"%Y-%m-%d %H:%M:%S",tm);
+}
+
+Heap *mkheap(){
+    Heap *h = malloc(sizeof(Heap));
+    h->cap = 16;
+    h->a = malloc(sizeof(P)*h->cap);
+    h->n = 0;
+    h->nextid = 1001;
+    return h;
+}
+
+void ensure(Heap *h){
+    if(h->n >= h->cap){
+        h->cap *= 2;
+        h->a = realloc(h->a, sizeof(P)*h->cap);
+    }
+}
+
+void sw(P *x, P *y){
+    P t = *x; *x = *y; *y = t;
+}
+
+int parent(int i){ return (i-1)/2; }
+int L(int i){ return 2*i+1; }
+int R(int i){ return 2*i+2; }
+
+void up(Heap *h, int i){
+    while(i>0 && h->a[parent(i)].pri > h->a[i].pri){
+        sw(&h->a[parent(i)], &h->a[i]);
+        i = parent(i);
+    }
+}
+
+void down(Heap *h, int i){
+    for(;;){
+        int l = L(i), r = R(i), s = i;
+        if(l < h->n && h->a[l].pri < h->a[s].pri) s = l;
+        if(r < h->n && h->a[r].pri < h->a[s].pri) s = r;
+        if(s==i) break;
+        sw(&h->a[i], &h->a[s]);
+        i = s;
+    }
+}
+
+int addp(Heap *h, const char *name, int age, int pri, const char *diag){
+    ensure(h);
+    P p;
+    p.id = h->nextid++;
+    strncpy(p.name, name, NAME_LEN-1); p.name[NAME_LEN-1]=0;
+    p.age = age; p.pri = pri;
+    strncpy(p.diag, diag, DIAG_LEN-1); p.diag[DIAG_LEN-1]=0;
+    nowstr(p.atime, sizeof(p.atime));
+    h->a[h->n] = p;
+    up(h, h->n);
+    h->n++;
+    return p.id;
+}
+
+P *peek(Heap *h){
+    if(h->n==0) return NULL;
+    return &h->a[0];
+}
+
+P popmin(Heap *h){
+    P out;
+    if(h->n==0){ memset(&out,0,sizeof(out)); out.id=-1; return out; }
+    out = h->a[0];
+    h->n--;
+    if(h->n>0){
+        h->a[0] = h->a[h->n];
+        down(h,0);
+    }
+    return out;
+}
+
+int findidx(Heap *h, int id){
+    for(int i=0;i<h->n;i++) if(h->a[i].id == id) return i;
+    return -1;
+}
+
+int removebyid(Heap *h, int id){
+    int i = findidx(h,id);
+    if(i==-1) return 0;
+    h->n--;
+    if(i != h->n){
+        h->a[i] = h->a[h->n];
+        down(h,i);
+        up(h,i);
+    }
+    return 1;
+}
+
+int updatepri(Heap *h, int id, int newp){
+    int i = findidx(h,id);
+    if(i==-1) return 0;
+    int old = h->a[i].pri;
+    h->a[i].pri = newp;
+    if(newp < old) up(h,i);
+    else if(newp > old) down(h,i);
+    return 1;
+}
+
+int icontains(const char *s, const char *t){
+    if(!*t) return 1;
+    for(; *s; s++){
+        const char *p=s, *q=t;
+        while(*p && *q && tolower((unsigned char)*p)==tolower((unsigned char)*q)){ p++; q++; }
+        if(!*q) return 1;
+    }
+    return 0;
+}
+
+void searchbyname(Heap *h, const char *sub){
+    int found=0;
+    for(int i=0;i<h->n;i++){
+        if(icontains(h->a[i].name, sub)){
+            P *p=&h->a[i];
+            printf("ID:%d | %s | Age:%d | Pri:%d | %s | %s\n", p->id, p->name, p->age, p->pri, p->diag, p->atime);
+            found++;
+        }
+    }
+    if(!found) printf("no match for '%s'\n", sub);
+}
+
+void showall(Heap *h){
+    if(h->n==0){ puts("no patients"); return; }
+    for(int i=0;i<h->n;i++){
+        P *p=&h->a[i];
+        printf("[%d] ID:%d %s Age:%d Pri:%d %s %s\n", i, p->id, p->name, p->age, p->pri, p->diag, p->atime);
+    }
+}
+
+int saveh(Heap *h, const char *fn){
+    FILE *f = fopen(fn, "wb"); if(!f) return 0;
+    fwrite(&h->nextid, sizeof(int), 1, f);
+    fwrite(&h->n, sizeof(int), 1, f);
+    if(h->n>0) fwrite(h->a, sizeof(P), h->n, f);
+    fclose(f); return 1;
+}
+
+int loadh(Heap *h, const char *fn){
+    FILE *f = fopen(fn, "rb"); if(!f) return 0;
+    int nid=0, nn=0;
+    fread(&nid, sizeof(int), 1, f);
+    fread(&nn, sizeof(int), 1, f);
+    if(nn>0){
+        while(h->cap < nn) h->cap *= 2;
+        h->a = realloc(h->a, sizeof(P)*h->cap);
+        fread(h->a, sizeof(P), nn, f);
+    }
+    h->n = nn;
+    h->nextid = nid;
+    fclose(f);
+    for(int i=(h->n/2)-1;i>=0;i--) down(h,i);
+    return 1;
+}
+
+P *sortedview(Heap *h){
+    if(h->n==0) return NULL;
+    P *c = malloc(sizeof(P)*h->n);
+    memcpy(c, h->a, sizeof(P)*h->n);
+    int m = h->n;
+    for(int i=(m/2)-1;i>=0;i--){
+        int idx=i;
+        for(;;){
+            int l=2*idx+1, r=2*idx+2, s=idx;
+            if(l<m && c[l].pri < c[s].pri) s=l;
+            if(r<m && c[r].pri < c[s].pri) s=r;
+            if(s==idx) break;
+            P t=c[idx]; c[idx]=c[s]; c[s]=t;
+            idx=s;
+        }
+    }
+    P *out = malloc(sizeof(P)*h->n);
+    for(int k=0;k<h->n;k++){
+        out[k]=c[0];
+        c[0]=c[m-1]; m--;
+        int idx=0;
+        while(m>0){
+            int l=2*idx+1, r=2*idx+2, s=idx;
+            if(l<m && c[l].pri < c[s].pri) s=l;
+            if(r<m && c[r].pri < c[s].pri) s=r;
+            if(s==idx) break;
+            P t=c[idx]; c[idx]=c[s]; c[s]=t;
+            idx=s;
+        }
+    }
+    free(c);
+    return out;
+}
+
+void stats(Heap *h){
+    printf("total:%d\n", h->n);
+    if(h->n==0) return;
+    long sum=0; int cnt[6]={0};
+    for(int i=0;i<h->n;i++){
+        sum += h->a[i].age;
+        int p=h->a[i].pri;
+        if(p<=1) cnt[1]++; else if(p==2) cnt[2]++; else if(p==3) cnt[3]++; else if(p==4) cnt[4]++; else cnt[5]++;
+    }
+    printf("avg age: %.2f\n", (double)sum/h->n);
+    printf("dist 1:%d 2:%d 3:%d 4:%d >=5:%d\n", cnt[1],cnt[2],cnt[3],cnt[4],cnt[5]);
+}
+
+int severity_from_text(const char *s){
+    if(!s) return 3;
+    char t[256]; strncpy(t,s,255); t[255]=0;
+    for(char *p=t; *p; ++p) *p = tolower((unsigned char)*p);
+    if(strstr(t,"cardiac") || strstr(t,"arrest") || strstr(t,"unconscious") || strstr(t,"severe bleed")) return 1;
+    if(strstr(t,"chest") || strstr(t,"breath") || strstr(t,"high fever") || strstr(t,"major")) return 2;
+    if(strstr(t,"fever") || strstr(t,"pain") || strstr(t,"sprain")) return 3;
+    return 4;
+}
+
+void menu(Heap *h){
+    for(;;){
+        puts("\n1.Add 2.Peek 3.Treat 4.Update 5.Remove 6.Search 7.ShowAll 8.Sorted 9.Save 10.Load 11.Stats 0.Exit");
+        printf("choice: ");
+        int ch;
+        if(scanf("%d",&ch)!=1){ while(getchar()!='\n'); puts("bad"); continue; }
+        while(getchar()!='\n');
+        if(ch==0) break;
+        if(ch==1){
+            char name[NAME_LEN], diag[DIAG_LEN];
+            int age;
+            printf("name: "); fgets(name, NAME_LEN, stdin); name[strcspn(name,"\n")]=0;
+            printf("age: "); if(scanf("%d",&age)!=1){ while(getchar()!='\n'); puts("bad age"); continue; }
+            while(getchar()!='\n');
+            printf("notes/cond: "); fgets(diag, DIAG_LEN, stdin); diag[strcspn(diag,"\n")]=0;
+            printf("pick severity: 1-Critical 2-Severe 3-Mod 4-Mild or 0 auto\nchoice: ");
+            int c; if(scanf("%d",&c)!=1){ while(getchar()!='\n'); c=0; }
+            while(getchar()!='\n');
+            int pri = (c>=1 && c<=4) ? c : severity_from_text(diag);
+            int id = addp(h, name, age, pri, diag);
+            printf("added id %d pri %d\n", id, pri);
+        } else if(ch==2){
+            P *p = peek(h);
+            if(!p) puts("no patients");
+            else printf("next id:%d %s pri:%d\n", p->id, p->name, p->pri);
+        } else if(ch==3){
+            P p = popmin(h);
+            if(p.id==-1) puts("no one to treat");
+            else printf("treating id:%d %s pri:%d note:%s\n", p.id, p.name, p.pri, p.diag);
+        } else if(ch==4){
+            int id, np;
+            printf("id: "); if(scanf("%d",&id)!=1){ while(getchar()!='\n'); puts("bad"); continue; }
+            printf("new pri(1..4): "); if(scanf("%d",&np)!=1){ while(getchar()!='\n'); puts("bad"); continue; }
+            while(getchar()!='\n');
+            printf(updatepri(h,id,np) ? "updated\n" : "not found\n");
+        } else if(ch==5){
+            int id; printf("id: "); if(scanf("%d",&id)!=1){ while(getchar()!='\n'); puts("bad"); continue; }
+            while(getchar()!='\n');
+            printf(removebyid(h,id) ? "removed\n" : "not found\n");
+        } else if(ch==6){
+            char s[NAME_LEN];
+            printf("name sub: "); fgets(s, NAME_LEN, stdin); s[strcspn(s,"\n")]=0;
+            searchbyname(h, s);
+        } else if(ch==7){
+            showall(h);
+        } else if(ch==8){
+            P *sv = sortedview(h);
+            if(!sv) puts("no");
+            else {
+                puts("sorted:");
+                for(int i=0;i<h->n;i++){
+                    P *p=&sv[i];
+                    printf("%d) id:%d %s pri:%d %s\n", i+1, p->id, p->name, p->pri, p->atime);
+                }
+                free(sv);
+            }
+        } else if(ch==9){
+            printf(saveh(h,FNAME) ? "saved\n":"save fail\n");
+        } else if(ch==10){
+            printf(loadh(h,FNAME) ? "loaded\n":"load fail\n");
+        } else if(ch==11){
+            stats(h);
+        } else {
+            puts("unknown");
+        }
+    }
+}
+
+int main(){
+    Heap *h = mkheap();
+    if(loadh(h,FNAME)) printf("loaded %d nextid=%d\n", h->n, h->nextid);
+    else printf("fresh start nextid=%d\n", h->nextid);
+    menu(h);
+    saveh(h,FNAME);
+    free(h->a); free(h);
+    return 0;
+}
